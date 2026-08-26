@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Routicket OAuth Demo</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f5f8fc;color:#172033;min-height:100vh;display:grid;place-items:center;padding:24px}.card{width:min(100%,460px);background:#fff;border:1px solid #e5eaf1;border-radius:24px;box-shadow:0 20px 60px rgba(17,31,55,.12);padding:32px}.brand{display:flex;align-items:center;gap:12px;margin-bottom:24px}.logo{width:48px;height:48px;border-radius:14px;display:grid;place-items:center;background:linear-gradient(135deg,#00c2cb,#1877f2);color:#fff;font-weight:800;font-size:21px}.brand h1{font-size:19px;margin:0}.brand p{margin:3px 0 0;color:#6c7890;font-size:13px}.hero h2{font-size:28px;line-height:1.1;margin:0 0 12px}.hero p{color:#667289;line-height:1.6;margin:0 0 24px}.btn{width:100%;border:0;border-radius:14px;padding:14px 18px;font-size:15px;font-weight:700;cursor:pointer;transition:.2s}.primary{background:#172033;color:#fff}.primary:hover{transform:translateY(-1px);box-shadow:0 10px 24px rgba(23,32,51,.2)}.secondary{background:#eef3f9;color:#26334c;margin-top:10px}.permissions{margin-top:24px;padding:16px;border-radius:16px;background:#f7fafc}.permissions strong{display:block;margin-bottom:10px}.permissions ul{padding-left:18px;margin:0;color:#647087;line-height:1.8;font-size:14px}.profile{display:none;text-align:center}.avatar{width:88px;height:88px;border-radius:50%;object-fit:cover;background:#e8edf5;margin:0 auto 14px}.profile h2{margin:0}.profile .email{color:#738097;margin:6px 0 22px}.status{font-size:13px;color:#7d8799;margin-top:18px;text-align:center}.error{color:#b42318;background:#fef3f2;border-radius:12px;padding:12px;margin-bottom:16px;display:none}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="brand">
+      <div class="logo">R</div>
+      <div><h1>Routicket OAuth</h1><p>Aplicación de demostración</p></div>
+    </div>
+
+    <div id="error" class="error"></div>
+
+    <section id="login" class="hero">
+      <h2>Inicia sesión con Routicket</h2>
+      <p>Este ejemplo muestra cómo una aplicación externa puede pedir autorización y obtener el perfil básico del usuario sin solicitar su contraseña.</p>
+      <button class="btn primary" onclick="location.href='/oauth/login'">Continuar con Routicket</button>
+      <div class="permissions">
+        <strong>La aplicación solicitará acceso a:</strong>
+        <ul>
+          <li>Tu nombre</li>
+          <li>Tu foto de perfil</li>
+          <li>Tu correo electrónico</li>
+          <li>Tu identificador de Routicket</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="profile" class="profile">
+      <img id="avatar" class="avatar" alt="Foto de perfil" />
+      <h2 id="name"></h2>
+      <div id="email" class="email"></div>
+      <button class="btn secondary" id="logout">Cerrar sesión</button>
+    </section>
+
+    <div class="status" id="status">Comprobando sesión…</div>
+  </main>
+
+  <script>
+    const $ = id => document.getElementById(id);
+
+    async function loadSession() {
+      const params = new URLSearchParams(location.search);
+      const oauth = params.get('oauth');
+      const reason = params.get('reason');
+      if (oauth === 'error' || oauth === 'cancelled') {
+        $('error').style.display = 'block';
+        $('error').textContent = oauth === 'cancelled' ? 'Autorización cancelada por el usuario.' : `No fue posible iniciar sesión${reason ? `: ${reason}` : '.'}`;
+      }
+
+      try {
+        const response = await fetch('/oauth/status', { cache: 'no-store' });
+        const data = await response.json();
+        if (data.connected && data.profile) {
+          $('login').style.display = 'none';
+          $('profile').style.display = 'block';
+          $('name').textContent = data.profile.name || 'Usuario Routicket';
+          $('email').textContent = data.profile.email || 'Correo no disponible';
+          $('avatar').src = data.profile.photo || 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="88" height="88"><rect width="100%" height="100%" fill="#e8edf5"/><text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" font-size="30" fill="#77849a">R</text></svg>');
+          $('status').textContent = 'Sesión conectada con Routicket';
+        } else {
+          $('status').textContent = 'No hay una sesión activa';
+        }
+      } catch {
+        $('status').textContent = 'No se pudo consultar el estado OAuth';
+      }
+    }
+
+    $('logout').addEventListener('click', async () => {
+      await fetch('/oauth/logout', { method: 'POST' });
+      location.href = '/';
+    });
+
+    loadSession();
+  </script>
+</body>
+</html>
