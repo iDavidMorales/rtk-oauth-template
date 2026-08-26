@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "rtk-oauth-template",
+  "main": "worker.js",
+  "compatibility_date": "2026-08-25",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+    }
+  ],
+  "vars": {
+    "RTK_CLIENT_ID": "replace_with_registered_client_id",
+    "RTK_REDIRECT_URI": "https://your-app.example.com/oauth/callback",
+    "APP_URL": "https://your-app.example.com/",
+    "RTK_SCOPE": "profile email"
+  }
+}
