@@ -7,16 +7,10 @@
     "directory": "./public",
     "binding": "ASSETS"
   },
-  "kv_namespaces": [
-    {
-      "binding": "OAUTH_KV",
-      "id": "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
-    }
-  ],
   "vars": {
     "RTK_CLIENT_ID": "replace_with_registered_client_id",
-    "RTK_REDIRECT_URI": "https://your-app.example.com/oauth/callback",
-    "APP_URL": "https://your-app.example.com/",
+    "RTK_REDIRECT_URI": "https://rtk-oauth-template.xupplier.workers.dev/oauth/callback",
+    "APP_URL": "https://rtk-oauth-template.xupplier.workers.dev/",
     "RTK_SCOPE": "profile email"
   }
 }
