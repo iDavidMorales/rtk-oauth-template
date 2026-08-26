@@ -1,0 +1,4 @@
+RTK_CLIENT_ID=replace_with_registered_client_id
+RTK_REDIRECT_URI=http://localhost:8787/oauth/callback
+APP_URL=http://localhost:8787/
+RTK_SCOPE=profile email
