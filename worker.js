@@ -2,14 +2,18 @@ const RTK_AUTHORIZE_URL = "https://routicket.com/oauth/authorize.php";
 const RTK_TOKEN_URL = "https://routicket.com/oauth/token.php";
 const RTK_USERINFO_URL = "https://routicket.com/oauth/userinfo.php";
 
+const COOKIE_STATE = "rtk_oauth_state";
+const COOKIE_VERIFIER = "rtk_oauth_verifier";
+const COOKIE_TOKEN = "rtk_access_token";
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
     if (url.pathname === "/oauth/login") return oauthLogin(env);
-    if (url.pathname === "/oauth/callback") return oauthCallback(url, env);
-    if (url.pathname === "/oauth/status") return oauthStatus(env);
-    if (url.pathname === "/oauth/logout" && request.method === "POST") return oauthLogout(env);
+    if (url.pathname === "/oauth/callback") return oauthCallback(request, url, env);
+    if (url.pathname === "/oauth/status") return oauthStatus(request, env);
+    if (url.pathname === "/oauth/logout" && request.method === "POST") return oauthLogout();
 
     return env.ASSETS.fetch(request);
   },
@@ -22,10 +26,6 @@ async function oauthLogin(env) {
   const verifier = randomBase64Url(64);
   const challenge = await sha256Base64Url(verifier);
 
-  await env.OAUTH_KV.put(`oauth_verifier:${state}`, verifier, {
-    expirationTtl: 600,
-  });
-
   const authorize = new URL(RTK_AUTHORIZE_URL);
   authorize.searchParams.set("response_type", "code");
   authorize.searchParams.set("client_id", env.RTK_CLIENT_ID);
@@ -35,29 +35,27 @@ async function oauthLogin(env) {
   authorize.searchParams.set("state", state);
   authorize.searchParams.set("scope", env.RTK_SCOPE || "profile email");
 
-  return Response.redirect(authorize.toString(), 302);
+  const headers = new Headers({ Location: authorize.toString() });
+  headers.append("Set-Cookie", makeCookie(COOKIE_STATE, state, 600));
+  headers.append("Set-Cookie", makeCookie(COOKIE_VERIFIER, verifier, 600));
+
+  return new Response(null, { status: 302, headers });
 }
 
-async function oauthCallback(url, env) {
+async function oauthCallback(request, url, env) {
   assertConfig(env);
 
   const error = url.searchParams.get("error");
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
+  const cookies = parseCookies(request.headers.get("Cookie") || "");
+  const expectedState = cookies[COOKIE_STATE];
+  const verifier = cookies[COOKIE_VERIFIER];
 
-  if (error) {
-    return Response.redirect(`${env.APP_URL}?oauth=cancelled&reason=${encodeURIComponent(error)}`, 302);
-  }
-
-  if (!code || !state) {
-    return Response.redirect(`${env.APP_URL}?oauth=error&reason=missing_code_or_state`, 302);
-  }
-
-  const verifierKey = `oauth_verifier:${state}`;
-  const verifier = await env.OAUTH_KV.get(verifierKey);
-
-  if (!verifier) {
-    return Response.redirect(`${env.APP_URL}?oauth=error&reason=invalid_or_expired_state`, 302);
+  if (error) return redirectWithClearedPkce(`${env.APP_URL}?oauth=cancelled&reason=${encodeURIComponent(error)}`);
+  if (!code || !state) return redirectWithClearedPkce(`${env.APP_URL}?oauth=error&reason=missing_code_or_state`);
+  if (!expectedState || !verifier || !safeEqual(state, expectedState)) {
+    return redirectWithClearedPkce(`${env.APP_URL}?oauth=error&reason=invalid_or_expired_state`);
   }
 
   const tokenBody = new URLSearchParams({
@@ -78,85 +76,73 @@ async function oauthCallback(url, env) {
   });
 
   const tokenResult = await safeJson(tokenResponse);
-
   if (!tokenResponse.ok || !tokenResult?.access_token) {
-    return Response.redirect(`${env.APP_URL}?oauth=error&reason=token_rejected`, 302);
+    return redirectWithClearedPkce(`${env.APP_URL}?oauth=error&reason=token_rejected`);
   }
 
-  const profileResponse = await fetch(RTK_USERINFO_URL, {
-    headers: {
-      Authorization: `Bearer ${tokenResult.access_token}`,
-      Accept: "application/json",
-    },
-  });
-
-  const userinfo = await safeJson(profileResponse);
-  const profile = normalizeProfile(userinfo);
-
-  if (!profileResponse.ok || !profile) {
-    return Response.redirect(`${env.APP_URL}?oauth=error&reason=profile_unavailable`, 302);
+  const profile = await fetchProfile(tokenResult.access_token);
+  if (!profile) {
+    return redirectWithClearedPkce(`${env.APP_URL}?oauth=error&reason=profile_unavailable`);
   }
 
-  await Promise.all([
-    env.OAUTH_KV.put("routicket_access_token", tokenResult.access_token),
-    tokenResult.refresh_token
-      ? env.OAUTH_KV.put("routicket_refresh_token", tokenResult.refresh_token)
-      : Promise.resolve(),
-    env.OAUTH_KV.put("routicket_profile", JSON.stringify(profile)),
-    env.OAUTH_KV.put(
-      "routicket_token_meta",
-      JSON.stringify({
-        connected_at: new Date().toISOString(),
-        expires_in: tokenResult.expires_in ?? null,
-        token_type: tokenResult.token_type || "Bearer",
-        scope: tokenResult.scope || env.RTK_SCOPE || "profile email",
-      }),
-    ),
-    env.OAUTH_KV.delete(verifierKey),
-  ]);
+  const maxAge = Math.max(60, Math.min(Number(tokenResult.expires_in) || 3600, 60 * 60 * 24 * 7));
+  const headers = new Headers({ Location: `${env.APP_URL}?oauth=success` });
+  headers.append("Set-Cookie", clearCookie(COOKIE_STATE));
+  headers.append("Set-Cookie", clearCookie(COOKIE_VERIFIER));
+  headers.append("Set-Cookie", makeCookie(COOKIE_TOKEN, tokenResult.access_token, maxAge));
 
-  return Response.redirect(`${env.APP_URL}?oauth=success`, 302);
+  return new Response(null, { status: 302, headers });
 }
 
-async function oauthStatus(env) {
-  assertConfig(env);
+async function oauthStatus(request, env) {
+  const cookies = parseCookies(request.headers.get("Cookie") || "");
+  const token = cookies[COOKIE_TOKEN];
 
-  const [token, profile, meta] = await Promise.all([
-    env.OAUTH_KV.get("routicket_access_token"),
-    env.OAUTH_KV.get("routicket_profile", "json"),
-    env.OAUTH_KV.get("routicket_token_meta", "json"),
-  ]);
+  if (!token) {
+    return json({ ok: true, connected: false, profile: null });
+  }
 
-  return json({
-    ok: true,
-    connected: Boolean(token && profile),
-    profile: profile || null,
-    meta: meta || null,
-  });
+  const profile = await fetchProfile(token);
+  if (!profile) {
+    const response = json({ ok: true, connected: false, profile: null });
+    response.headers.append("Set-Cookie", clearCookie(COOKIE_TOKEN));
+    return response;
+  }
+
+  return json({ ok: true, connected: true, profile });
 }
 
-async function oauthLogout(env) {
-  assertConfig(env);
+function oauthLogout() {
+  const response = json({ ok: true });
+  response.headers.append("Set-Cookie", clearCookie(COOKIE_TOKEN));
+  response.headers.append("Set-Cookie", clearCookie(COOKIE_STATE));
+  response.headers.append("Set-Cookie", clearCookie(COOKIE_VERIFIER));
+  return response;
+}
 
-  await Promise.all([
-    env.OAUTH_KV.delete("routicket_access_token"),
-    env.OAUTH_KV.delete("routicket_refresh_token"),
-    env.OAUTH_KV.delete("routicket_profile"),
-    env.OAUTH_KV.delete("routicket_token_meta"),
-  ]);
-
-  return json({ ok: true });
+async function fetchProfile(accessToken) {
+  try {
+    const response = await fetch(RTK_USERINFO_URL, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+      },
+    });
+    const payload = await safeJson(response);
+    if (!response.ok) return null;
+    return normalizeProfile(payload);
+  } catch {
+    return null;
+  }
 }
 
 function normalizeProfile(payload) {
   if (!payload || typeof payload !== "object") return null;
-
   const source = payload.user || payload.profile || payload.data || payload;
   const id = source.id ?? source.user_id ?? source.id_usuario ?? source.usuario_id ?? null;
   const name = source.name ?? source.nombre ?? source.display_name ?? source.username ?? null;
   const email = source.email ?? source.correo ?? null;
   const photo = source.photo ?? source.foto ?? source.avatar ?? source.picture ?? null;
-
   if (!id) return null;
 
   return {
@@ -169,14 +155,41 @@ function normalizeProfile(payload) {
 
 function assertConfig(env) {
   const missing = [];
-  if (!env.OAUTH_KV) missing.push("OAUTH_KV");
   if (!env.RTK_CLIENT_ID) missing.push("RTK_CLIENT_ID");
   if (!env.RTK_REDIRECT_URI) missing.push("RTK_REDIRECT_URI");
   if (!env.APP_URL) missing.push("APP_URL");
+  if (missing.length) throw new Error(`Missing OAuth configuration: ${missing.join(", ")}`);
+}
 
-  if (missing.length) {
-    throw new Error(`Missing OAuth configuration: ${missing.join(", ")}`);
-  }
+function parseCookies(header) {
+  return Object.fromEntries(
+    header.split(";").map(v => v.trim()).filter(Boolean).map(pair => {
+      const index = pair.indexOf("=");
+      return index === -1 ? [pair, ""] : [pair.slice(0, index), decodeURIComponent(pair.slice(index + 1))];
+    }),
+  );
+}
+
+function makeCookie(name, value, maxAge) {
+  return `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
+}
+
+function clearCookie(name) {
+  return `${name}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
+}
+
+function redirectWithClearedPkce(location) {
+  const headers = new Headers({ Location: location });
+  headers.append("Set-Cookie", clearCookie(COOKIE_STATE));
+  headers.append("Set-Cookie", clearCookie(COOKIE_VERIFIER));
+  return new Response(null, { status: 302, headers });
+}
+
+function safeEqual(a, b) {
+  if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return result === 0;
 }
 
 function randomBase64Url(bytes) {
@@ -198,11 +211,7 @@ function bytesToBase64Url(bytes) {
 
 async function safeJson(response) {
   const text = await response.text();
-  try {
-    return text ? JSON.parse(text) : {};
-  } catch {
-    return null;
-  }
+  try { return text ? JSON.parse(text) : {}; } catch { return null; }
 }
 
 function json(data, status = 200) {
