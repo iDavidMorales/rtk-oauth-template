@@ -239,3 +239,58 @@ y obtener una demostración de **Login con Routicket** y lectura del perfil del 
 ## Licencia
 
 Puedes utilizar esta plantilla como base para aplicaciones que se integren con Routicket.
+
+## Guía rápida de credenciales y APIs
+
+Registra la aplicación en `https://routicket.com/developers/`. En la sección **Applications** copia el `App ID`, `Client ID` y el `Redirect URI`. Para OAuth también necesitarás:
+
+```text
+Authorize: https://routicket.com/oauth/authorize.php
+Token:     https://routicket.com/oauth/token.php
+User info: https://routicket.com/oauth/userinfo.php
+```
+
+La plantilla oficial usa estos valores:
+
+```text
+RTK_CLIENT_ID=rtk_oauth_template
+RTK_REDIRECT_URI=https://rtk-oauth-template.xupplier.workers.dev/oauth/callback
+APP_URL=https://rtk-oauth-template.xupplier.workers.dev/
+RTK_SCOPE=profile email
+```
+
+El `client_secret` solo se muestra una vez al crear una app. Para una aplicación pública se debe usar PKCE y no exponer secretos en el navegador.
+
+### Intercambiar el código por token
+
+Después de que el callback reciba `code`, el backend envía el `code_verifier` original:
+
+```bash
+curl -X POST https://routicket.com/oauth/token.php \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  --data-urlencode 'grant_type=authorization_code' \
+  --data-urlencode 'client_id=rtk_oauth_template' \
+  --data-urlencode 'redirect_uri=https://rtk-oauth-template.xupplier.workers.dev/oauth/callback' \
+  --data-urlencode 'code=CODE_RECIBIDO_EN_CALLBACK' \
+  --data-urlencode 'code_verifier=VERIFIER_GUARDADO_EN_SESION'
+```
+
+Respuesta esperada:
+
+```json
+{
+  "access_token": "TOKEN_PRIVADO",
+  "token_type": "Bearer",
+  "expires_in": 2592000,
+  "scope": "profile,email"
+}
+```
+
+### Consultar la información del usuario
+
+```bash
+curl https://routicket.com/oauth/userinfo.php \
+  -H "Authorization: Bearer TOKEN_PRIVADO"
+```
+
+No compartas el `access_token`, el `code_verifier` ni las cookies OAuth. Si el token expira o aparece `invalid_or_expired_token`, inicia nuevamente `/oauth/login`.
