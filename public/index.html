@@ -11,7 +11,7 @@
 <body>
   <main class="card">
     <div class="brand">
-      <div class="logo">R</div>
+      <div class="logo"><img id="appLogo" alt="" hidden style="width:34px;height:34px;object-fit:contain"> <span id="logoFallback">R</span></div>
       <div><h1 id="appTitle">Routicket OAuth</h1><p id="appSubtitle">Aplicación de demostración</p></div>
     </div>
 
@@ -51,6 +51,12 @@
     $('appSubtitle').textContent = appId ? `Aplicación registrada · App ID ${appId}` : 'Conexión segura con Routicket';
     $('loginTitle').textContent = `Conecta ${appName} con Routicket`;
     $('loginDescription').textContent = `${appName} te llevará a Routicket para iniciar sesión y autorizar el acceso solicitado. Tu contraseña no se comparte con la aplicación.`;
+    if (appId) {
+      const logo = $('appLogo');
+      logo.src = 'https://rtk-games.vercel.app/game/05/assets/royal/crown.svg';
+      logo.hidden = false;
+      $('logoFallback').hidden = true;
+    }
     document.querySelector('#login button.primary').onclick = () => location.href = '/oauth/login?app_id=' + encodeURIComponent(appId || '1');
 
     async function loadSession() {
