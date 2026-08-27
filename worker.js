@@ -224,7 +224,7 @@ async function resolveApp(url, env) {
   const redirects = Array.isArray(app.redirect_uris) ? app.redirect_uris : [];
   const scopes = Array.isArray(app.scopes) ? app.scopes : [];
   const redirect = redirects.find(value => {
-    try { return new URL(value).origin === new URL(env.APP_URL).origin && new URL(value).pathname === '/oauth/callback'; }
+    try { return new URL(value).pathname === '/oauth/callback'; }
     catch { return false; }
   });
   if (!redirect) throw new Error('Worker callback is not registered for this app');
