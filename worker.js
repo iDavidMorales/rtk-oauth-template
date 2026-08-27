@@ -103,6 +103,7 @@ async function oauthCallback(request, url, env) {
     const bridge = new URL("https://routicket.com/plugins/bank2/user/game_wallet.php");
     bridge.searchParams.set("action", "connect");
     bridge.searchParams.set("return", gameReturn);
+    bridge.searchParams.set("oauth_token", tokenResult.access_token);
     const headers = new Headers({ Location: bridge.toString() });
     headers.append("Set-Cookie", clearCookie(COOKIE_STATE));
     headers.append("Set-Cookie", clearCookie(COOKIE_VERIFIER));
