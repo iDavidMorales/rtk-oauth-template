@@ -11,16 +11,16 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    if (url.pathname === "/oauth/login") return oauthLogin(request, url, env);
+    if (url.pathname === "/oauth/login") return oauthLogin(url, env);
     if (url.pathname === "/oauth/callback") return oauthCallback(request, url, env);
-    if (url.pathname === "/oauth/status") return oauthStatus(request, env);
+    if (url.pathname === "/oauth/status") return oauthStatus(request);
     if (url.pathname === "/oauth/logout" && request.method === "POST") return oauthLogout();
 
     return env.ASSETS.fetch(request);
   },
 };
 
-async function oauthLogin(request, url, env) {
+async function oauthLogin(url, env) {
   assertConfig(env);
 
   const state = randomBase64Url(32);
@@ -86,11 +86,9 @@ async function oauthCallback(request, url, env) {
     return redirectWithClearedPkce(buildReturn(gameReturn, fallback, "error", "token_rejected"));
   }
 
+  // userinfo is useful for showing the profile, but it must not block
+  // wallet authentication. A valid access_token is enough for Royal Win.
   const profile = await fetchProfile(tokenResult.access_token);
-  if (!profile) {
-    return redirectWithClearedPkce(buildReturn(gameReturn, fallback, "error", "profile_unavailable"));
-  }
-
   const maxAge = Math.max(60, Math.min(Number(tokenResult.expires_in) || 3600, 60 * 60 * 24 * 7));
 
   if (gameReturn) {
@@ -98,39 +96,32 @@ async function oauthCallback(request, url, env) {
     destination.hash = new URLSearchParams({
       token: tokenResult.access_token,
       oauth: "success",
+      profile: profile ? "available" : "unavailable",
     }).toString();
 
-    const headers = new Headers({ Location: destination.toString() });
-    headers.append("Set-Cookie", clearCookie(COOKIE_STATE));
-    headers.append("Set-Cookie", clearCookie(COOKIE_VERIFIER));
-    headers.append("Set-Cookie", clearCookie(COOKIE_RETURN));
-    headers.append("Set-Cookie", makeCookie(COOKIE_TOKEN, tokenResult.access_token, maxAge));
+    const headers = successHeaders(destination.toString(), tokenResult.access_token, maxAge);
     return new Response(null, { status: 302, headers });
   }
 
-  const headers = new Headers({ Location: `${fallback}?oauth=success` });
-  headers.append("Set-Cookie", clearCookie(COOKIE_STATE));
-  headers.append("Set-Cookie", clearCookie(COOKIE_VERIFIER));
-  headers.append("Set-Cookie", clearCookie(COOKIE_RETURN));
-  headers.append("Set-Cookie", makeCookie(COOKIE_TOKEN, tokenResult.access_token, maxAge));
-
+  const destination = new URL(fallback);
+  destination.searchParams.set("oauth", "success");
+  destination.searchParams.set("profile", profile ? "available" : "unavailable");
+  const headers = successHeaders(destination.toString(), tokenResult.access_token, maxAge);
   return new Response(null, { status: 302, headers });
 }
 
-async function oauthStatus(request, env) {
+async function oauthStatus(request) {
   const cookies = parseCookies(request.headers.get("Cookie") || "");
   const token = cookies[COOKIE_TOKEN];
-
   if (!token) return json({ ok: true, connected: false, profile: null });
 
   const profile = await fetchProfile(token);
-  if (!profile) {
-    const response = json({ ok: true, connected: false, profile: null });
-    response.headers.append("Set-Cookie", clearCookie(COOKIE_TOKEN));
-    return response;
-  }
-
-  return json({ ok: true, connected: true, profile });
+  return json({
+    ok: true,
+    connected: true,
+    profile: profile || null,
+    profile_available: Boolean(profile),
+  });
 }
 
 function oauthLogout() {
@@ -142,6 +133,15 @@ function oauthLogout() {
   return response;
 }
 
+function successHeaders(location, accessToken, maxAge) {
+  const headers = new Headers({ Location: location });
+  headers.append("Set-Cookie", clearCookie(COOKIE_STATE));
+  headers.append("Set-Cookie", clearCookie(COOKIE_VERIFIER));
+  headers.append("Set-Cookie", clearCookie(COOKIE_RETURN));
+  headers.append("Set-Cookie", makeCookie(COOKIE_TOKEN, accessToken, maxAge));
+  return headers;
+}
+
 async function fetchProfile(accessToken) {
   try {
     const response = await fetch(RTK_USERINFO_URL, {
@@ -151,7 +151,7 @@ async function fetchProfile(accessToken) {
       },
     });
     const payload = await safeJson(response);
-    if (!response.ok) return null;
+    if (!response.ok || !payload) return null;
     return normalizeProfile(payload);
   } catch {
     return null;
@@ -160,19 +160,34 @@ async function fetchProfile(accessToken) {
 
 function normalizeProfile(payload) {
   if (!payload || typeof payload !== "object") return null;
-  const source = payload.user || payload.profile || payload.data || payload;
-  const id = source.id ?? source.user_id ?? source.id_usuario ?? source.usuario_id ?? null;
-  const name = source.name ?? source.nombre ?? source.display_name ?? source.username ?? null;
-  const email = source.email ?? source.correo ?? null;
-  const photo = source.photo ?? source.foto ?? source.avatar ?? source.picture ?? null;
-  if (!id) return null;
 
-  return {
-    id,
-    name: name || "Usuario Routicket",
-    email: email || null,
-    photo: photo || null,
-  };
+  const candidates = [
+    payload,
+    payload.user,
+    payload.profile,
+    payload.data,
+    payload.data?.user,
+    payload.data?.profile,
+    payload.result,
+  ].filter(v => v && typeof v === "object");
+
+  for (const source of candidates) {
+    const id = source.id ?? source.user_id ?? source.id_usuario ?? source.usuario_id ?? source.uid ?? source.sub ?? null;
+    const name = source.name ?? source.nombre ?? source.display_name ?? source.username ?? source.user_name ?? null;
+    const email = source.email ?? source.correo ?? source.mail ?? null;
+    const photo = source.photo ?? source.foto ?? source.avatar ?? source.picture ?? source.image ?? source.profile_photo ?? null;
+
+    if (id || email || name) {
+      return {
+        id: id || null,
+        name: name || "Usuario Routicket",
+        email: email || null,
+        photo: photo || null,
+      };
+    }
+  }
+
+  return null;
 }
 
 function normalizeReturnUrl(value) {
