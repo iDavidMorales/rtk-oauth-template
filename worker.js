@@ -5,12 +5,13 @@ const RTK_USERINFO_URL = "https://routicket.com/oauth/userinfo.php";
 const COOKIE_STATE = "rtk_oauth_state";
 const COOKIE_VERIFIER = "rtk_oauth_verifier";
 const COOKIE_TOKEN = "rtk_access_token";
+const COOKIE_RETURN = "rtk_oauth_return";
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    if (url.pathname === "/oauth/login") return oauthLogin(env);
+    if (url.pathname === "/oauth/login") return oauthLogin(request, url, env);
     if (url.pathname === "/oauth/callback") return oauthCallback(request, url, env);
     if (url.pathname === "/oauth/status") return oauthStatus(request, env);
     if (url.pathname === "/oauth/logout" && request.method === "POST") return oauthLogout();
@@ -19,12 +20,13 @@ export default {
   },
 };
 
-async function oauthLogin(env) {
+async function oauthLogin(request, url, env) {
   assertConfig(env);
 
   const state = randomBase64Url(32);
   const verifier = randomBase64Url(64);
   const challenge = await sha256Base64Url(verifier);
+  const requestedReturn = normalizeReturnUrl(url.searchParams.get("return"));
 
   const authorize = new URL(RTK_AUTHORIZE_URL);
   authorize.searchParams.set("response_type", "code");
@@ -38,6 +40,8 @@ async function oauthLogin(env) {
   const headers = new Headers({ Location: authorize.toString() });
   headers.append("Set-Cookie", makeCookie(COOKIE_STATE, state, 600));
   headers.append("Set-Cookie", makeCookie(COOKIE_VERIFIER, verifier, 600));
+  if (requestedReturn) headers.append("Set-Cookie", makeCookie(COOKIE_RETURN, requestedReturn, 600));
+  else headers.append("Set-Cookie", clearCookie(COOKIE_RETURN));
 
   return new Response(null, { status: 302, headers });
 }
@@ -51,11 +55,13 @@ async function oauthCallback(request, url, env) {
   const cookies = parseCookies(request.headers.get("Cookie") || "");
   const expectedState = cookies[COOKIE_STATE];
   const verifier = cookies[COOKIE_VERIFIER];
+  const gameReturn = normalizeReturnUrl(cookies[COOKIE_RETURN]);
+  const fallback = env.APP_URL;
 
-  if (error) return redirectWithClearedPkce(`${env.APP_URL}?oauth=cancelled&reason=${encodeURIComponent(error)}`);
-  if (!code || !state) return redirectWithClearedPkce(`${env.APP_URL}?oauth=error&reason=missing_code_or_state`);
+  if (error) return redirectWithClearedPkce(buildReturn(gameReturn, fallback, "cancelled", error));
+  if (!code || !state) return redirectWithClearedPkce(buildReturn(gameReturn, fallback, "error", "missing_code_or_state"));
   if (!expectedState || !verifier || !safeEqual(state, expectedState)) {
-    return redirectWithClearedPkce(`${env.APP_URL}?oauth=error&reason=invalid_or_expired_state`);
+    return redirectWithClearedPkce(buildReturn(gameReturn, fallback, "error", "invalid_or_expired_state"));
   }
 
   const tokenBody = new URLSearchParams({
@@ -77,18 +83,35 @@ async function oauthCallback(request, url, env) {
 
   const tokenResult = await safeJson(tokenResponse);
   if (!tokenResponse.ok || !tokenResult?.access_token) {
-    return redirectWithClearedPkce(`${env.APP_URL}?oauth=error&reason=token_rejected`);
+    return redirectWithClearedPkce(buildReturn(gameReturn, fallback, "error", "token_rejected"));
   }
 
   const profile = await fetchProfile(tokenResult.access_token);
   if (!profile) {
-    return redirectWithClearedPkce(`${env.APP_URL}?oauth=error&reason=profile_unavailable`);
+    return redirectWithClearedPkce(buildReturn(gameReturn, fallback, "error", "profile_unavailable"));
   }
 
   const maxAge = Math.max(60, Math.min(Number(tokenResult.expires_in) || 3600, 60 * 60 * 24 * 7));
-  const headers = new Headers({ Location: `${env.APP_URL}?oauth=success` });
+
+  if (gameReturn) {
+    const destination = new URL(gameReturn);
+    destination.hash = new URLSearchParams({
+      token: tokenResult.access_token,
+      oauth: "success",
+    }).toString();
+
+    const headers = new Headers({ Location: destination.toString() });
+    headers.append("Set-Cookie", clearCookie(COOKIE_STATE));
+    headers.append("Set-Cookie", clearCookie(COOKIE_VERIFIER));
+    headers.append("Set-Cookie", clearCookie(COOKIE_RETURN));
+    headers.append("Set-Cookie", makeCookie(COOKIE_TOKEN, tokenResult.access_token, maxAge));
+    return new Response(null, { status: 302, headers });
+  }
+
+  const headers = new Headers({ Location: `${fallback}?oauth=success` });
   headers.append("Set-Cookie", clearCookie(COOKIE_STATE));
   headers.append("Set-Cookie", clearCookie(COOKIE_VERIFIER));
+  headers.append("Set-Cookie", clearCookie(COOKIE_RETURN));
   headers.append("Set-Cookie", makeCookie(COOKIE_TOKEN, tokenResult.access_token, maxAge));
 
   return new Response(null, { status: 302, headers });
@@ -98,9 +121,7 @@ async function oauthStatus(request, env) {
   const cookies = parseCookies(request.headers.get("Cookie") || "");
   const token = cookies[COOKIE_TOKEN];
 
-  if (!token) {
-    return json({ ok: true, connected: false, profile: null });
-  }
+  if (!token) return json({ ok: true, connected: false, profile: null });
 
   const profile = await fetchProfile(token);
   if (!profile) {
@@ -117,6 +138,7 @@ function oauthLogout() {
   response.headers.append("Set-Cookie", clearCookie(COOKIE_TOKEN));
   response.headers.append("Set-Cookie", clearCookie(COOKIE_STATE));
   response.headers.append("Set-Cookie", clearCookie(COOKIE_VERIFIER));
+  response.headers.append("Set-Cookie", clearCookie(COOKIE_RETURN));
   return response;
 }
 
@@ -153,6 +175,27 @@ function normalizeProfile(payload) {
   };
 }
 
+function normalizeReturnUrl(value) {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    const allowedOrigin = url.origin === "https://rtk-games.vercel.app";
+    const allowedPath = url.pathname.startsWith("/game/05/") || url.pathname === "/game/05";
+    if (!allowedOrigin || !allowedPath) return null;
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function buildReturn(gameReturn, fallback, status, reason) {
+  const destination = new URL(gameReturn || fallback);
+  destination.searchParams.set("oauth", status);
+  if (reason) destination.searchParams.set("reason", reason);
+  return destination.toString();
+}
+
 function assertConfig(env) {
   const missing = [];
   if (!env.RTK_CLIENT_ID) missing.push("RTK_CLIENT_ID");
@@ -182,6 +225,7 @@ function redirectWithClearedPkce(location) {
   const headers = new Headers({ Location: location });
   headers.append("Set-Cookie", clearCookie(COOKIE_STATE));
   headers.append("Set-Cookie", clearCookie(COOKIE_VERIFIER));
+  headers.append("Set-Cookie", clearCookie(COOKIE_RETURN));
   return new Response(null, { status: 302, headers });
 }
 
