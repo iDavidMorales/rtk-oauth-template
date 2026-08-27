@@ -12,14 +12,14 @@
   <main class="card">
     <div class="brand">
       <div class="logo">R</div>
-      <div><h1>Routicket OAuth</h1><p>Aplicación de demostración</p></div>
+      <div><h1 id="appTitle">Routicket OAuth</h1><p id="appSubtitle">Aplicación de demostración</p></div>
     </div>
 
     <div id="error" class="error"></div>
 
     <section id="login" class="hero">
-      <h2>Inicia sesión con Routicket</h2>
-      <p>Este ejemplo muestra cómo una aplicación externa puede pedir autorización y obtener el perfil básico del usuario sin solicitar su contraseña.</p>
+      <h2 id="loginTitle">Inicia sesión con Routicket</h2>
+      <p id="loginDescription">Esta aplicación externa solicitará autorización para conectarse con Routicket.</p>
       <button class="btn primary" onclick="location.href='/oauth/login'">Continuar con Routicket</button>
       <div class="permissions">
         <strong>La aplicación solicitará acceso a:</strong>
@@ -44,6 +44,14 @@
 
   <script>
     const $ = id => document.getElementById(id);
+    const app = new URLSearchParams(location.search);
+    const appName = app.get('nombre') || 'Routicket OAuth';
+    const appId = app.get('app_id');
+    $('appTitle').textContent = appName;
+    $('appSubtitle').textContent = appId ? `Aplicación registrada · App ID ${appId}` : 'Conexión segura con Routicket';
+    $('loginTitle').textContent = `Conecta ${appName} con Routicket`;
+    $('loginDescription').textContent = `${appName} te llevará a Routicket para iniciar sesión y autorizar el acceso solicitado. Tu contraseña no se comparte con la aplicación.`;
+    document.querySelector('#login button.primary').onclick = () => location.href = '/oauth/login?app_id=' + encodeURIComponent(appId || '1');
 
     async function loadSession() {
       const params = new URLSearchParams(location.search);

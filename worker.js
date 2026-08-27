@@ -1,11 +1,13 @@
 const RTK_AUTHORIZE_URL = "https://routicket.com/oauth/authorize.php";
 const RTK_TOKEN_URL = "https://routicket.com/oauth/token.php";
 const RTK_USERINFO_URL = "https://routicket.com/oauth/userinfo.php";
+const RTK_APP_URL = "https://routicket.com/oauth/app.php";
 
 const COOKIE_STATE = "rtk_oauth_state";
 const COOKIE_VERIFIER = "rtk_oauth_verifier";
 const COOKIE_TOKEN = "rtk_access_token";
 const COOKIE_RETURN = "rtk_oauth_return";
+const COOKIE_APP = "rtk_oauth_app";
 
 export default {
   async fetch(request, env) {
@@ -21,7 +23,7 @@ export default {
 };
 
 async function oauthLogin(url, env) {
-  assertConfig(env);
+  const app = await resolveApp(url, env);
 
   const state = randomBase64Url(32);
   const verifier = randomBase64Url(64);
@@ -30,16 +32,17 @@ async function oauthLogin(url, env) {
 
   const authorize = new URL(RTK_AUTHORIZE_URL);
   authorize.searchParams.set("response_type", "code");
-  authorize.searchParams.set("client_id", env.RTK_CLIENT_ID);
-  authorize.searchParams.set("redirect_uri", env.RTK_REDIRECT_URI);
+  authorize.searchParams.set("client_id", app.client_id);
+  authorize.searchParams.set("redirect_uri", app.redirect_uri);
   authorize.searchParams.set("code_challenge", challenge);
   authorize.searchParams.set("code_challenge_method", "S256");
   authorize.searchParams.set("state", state);
-  authorize.searchParams.set("scope", env.RTK_SCOPE || "profile email");
+  authorize.searchParams.set("scope", app.scopes.join(" "));
 
   const headers = new Headers({ Location: authorize.toString() });
   headers.append("Set-Cookie", makeCookie(COOKIE_STATE, state, 600));
   headers.append("Set-Cookie", makeCookie(COOKIE_VERIFIER, verifier, 600));
+  headers.append("Set-Cookie", makeCookie(COOKIE_APP, JSON.stringify(app), 600));
   if (requestedReturn) headers.append("Set-Cookie", makeCookie(COOKIE_RETURN, requestedReturn, 600));
   else headers.append("Set-Cookie", clearCookie(COOKIE_RETURN));
 
@@ -56,6 +59,8 @@ async function oauthCallback(request, url, env) {
   const expectedState = cookies[COOKIE_STATE];
   const verifier = cookies[COOKIE_VERIFIER];
   const gameReturn = normalizeReturnUrl(cookies[COOKIE_RETURN]);
+  const app = parseJsonCookie(cookies[COOKIE_APP]);
+  if (!app?.client_id || !app?.redirect_uri) return redirectWithClearedPkce(buildReturn(gameReturn, env.APP_URL, "error", "missing_app_context"));
   const fallback = env.APP_URL;
 
   if (error) return redirectWithClearedPkce(buildReturn(gameReturn, fallback, "cancelled", error));
@@ -66,9 +71,9 @@ async function oauthCallback(request, url, env) {
 
   const tokenBody = new URLSearchParams({
     grant_type: "authorization_code",
-    client_id: env.RTK_CLIENT_ID,
+    client_id: app.client_id,
     code,
-    redirect_uri: env.RTK_REDIRECT_URI,
+    redirect_uri: app.redirect_uri,
     code_verifier: verifier,
   });
 
@@ -204,6 +209,24 @@ function normalizeReturnUrl(value) {
   }
 }
 
+async function resolveApp(url, env) {
+  const id = url.searchParams.get('app_id');
+  const slug = url.searchParams.get('slug');
+  const query = id ? `app_id=${encodeURIComponent(id)}` : (slug ? `slug=${encodeURIComponent(slug)}` : '');
+  if (!query) throw new Error('Missing app_id');
+  const response = await fetch(`${RTK_APP_URL}?${query}`, { headers: { Accept: 'application/json' } });
+  const payload = await safeJson(response);
+  if (!response.ok || !payload?.app) throw new Error('App not registered');
+  const app = payload.app;
+  const redirect = app.redirect_uris.find(value => value === env.RTK_REDIRECT_URI);
+  if (!redirect) throw new Error('Worker callback is not registered for this app');
+  return { ...app, redirect_uri: redirect, scopes: app.scopes.length ? app.scopes : ['profile', 'email'] };
+}
+
+function parseJsonCookie(value) {
+  try { return JSON.parse(value || ''); } catch { return null; }
+}
+
 function buildReturn(gameReturn, fallback, status, reason) {
   const destination = new URL(gameReturn || fallback);
   destination.searchParams.set("oauth", status);
@@ -213,7 +236,6 @@ function buildReturn(gameReturn, fallback, status, reason) {
 
 function assertConfig(env) {
   const missing = [];
-  if (!env.RTK_CLIENT_ID) missing.push("RTK_CLIENT_ID");
   if (!env.RTK_REDIRECT_URI) missing.push("RTK_REDIRECT_URI");
   if (!env.APP_URL) missing.push("APP_URL");
   if (missing.length) throw new Error(`Missing OAuth configuration: ${missing.join(", ")}`);
