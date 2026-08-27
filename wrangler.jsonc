@@ -8,9 +8,9 @@
     "binding": "ASSETS"
   },
   "vars": {
-    "RTK_CLIENT_ID": "rtk_oauth_template",
+    "RTK_CLIENT_ID": "rtk_royal_win_master",
     "RTK_REDIRECT_URI": "https://rtk-oauth-template.xupplier.workers.dev/oauth/callback",
     "APP_URL": "https://rtk-oauth-template.xupplier.workers.dev/",
-    "RTK_SCOPE": "profile email"
+    "RTK_SCOPE": "profile email wallet"
   }
 }
