@@ -100,14 +100,14 @@ async function oauthCallback(request, url, env) {
   const maxAge = Math.max(60, Math.min(Number(tokenResult.expires_in) || 3600, 60 * 60 * 24 * 7));
 
   if (gameReturn) {
-    const destination = new URL(gameReturn);
-    destination.hash = new URLSearchParams({
-      token: tokenResult.access_token,
-      oauth: "success",
-      profile: profile ? "available" : "unavailable",
-    }).toString();
-
-    const headers = successHeaders(destination.toString(), tokenResult.access_token, maxAge);
+    const bridge = new URL("https://routicket.com/plugins/bank2/user/game_wallet.php");
+    bridge.searchParams.set("action", "connect");
+    bridge.searchParams.set("return", gameReturn);
+    const headers = new Headers({ Location: bridge.toString() });
+    headers.append("Set-Cookie", clearCookie(COOKIE_STATE));
+    headers.append("Set-Cookie", clearCookie(COOKIE_VERIFIER));
+    headers.append("Set-Cookie", clearCookie(COOKIE_RETURN));
+    headers.append("Set-Cookie", makeCookie(COOKIE_TOKEN, tokenResult.access_token, maxAge));
     return new Response(null, { status: 302, headers });
   }
 
