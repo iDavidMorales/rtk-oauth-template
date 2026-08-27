@@ -203,7 +203,8 @@ function normalizeReturnUrl(value) {
   try {
     const url = new URL(value);
     const allowedOrigin = url.origin === "https://rtk-games.vercel.app";
-    const allowedPath = url.pathname.startsWith("/game/05/") || url.pathname === "/game/05";
+    const allowedPath = url.pathname.startsWith("/game/05/") || url.pathname === "/game/05"
+      || url.pathname.startsWith("/game/01/ruleta-riviera/") || url.pathname === "/game/01/ruleta-riviera";
     if (!allowedOrigin || !allowedPath) return null;
     url.hash = "";
     return url.toString();
