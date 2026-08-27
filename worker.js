@@ -13,7 +13,10 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    if (url.pathname === "/oauth/login") return oauthLogin(url, env);
+    if (url.pathname === "/oauth/login") {
+      try { return await oauthLogin(url, env); }
+      catch (error) { return json({ ok: false, error: "oauth_login_unavailable", detail: error?.message || "configuration_error" }, 503); }
+    }
     if (url.pathname === "/oauth/callback") return oauthCallback(request, url, env);
     if (url.pathname === "/oauth/status") return oauthStatus(request);
     if (url.pathname === "/oauth/logout" && request.method === "POST") return oauthLogout();
@@ -218,9 +221,11 @@ async function resolveApp(url, env) {
   const payload = await safeJson(response);
   if (!response.ok || !payload?.app) throw new Error('App not registered');
   const app = payload.app;
-  const redirect = app.redirect_uris.find(value => value === env.RTK_REDIRECT_URI);
+  const redirects = Array.isArray(app.redirect_uris) ? app.redirect_uris : [];
+  const scopes = Array.isArray(app.scopes) ? app.scopes : [];
+  const redirect = redirects.find(value => value === env.RTK_REDIRECT_URI);
   if (!redirect) throw new Error('Worker callback is not registered for this app');
-  return { ...app, redirect_uri: redirect, scopes: app.scopes.length ? app.scopes : ['profile', 'email'] };
+  return { ...app, redirect_uri: redirect, scopes: scopes.length ? scopes : ['profile', 'email'] };
 }
 
 function parseJsonCookie(value) {
